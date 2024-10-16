@@ -25,6 +25,7 @@ int state_machine(struct state_machine *machine, unsigned char byte)
         break;
 
     case FLAG_RCV:
+        status = 1;
         state_machine_FLAG_RCV(machine, byte);
         break;
 
@@ -38,8 +39,7 @@ int state_machine(struct state_machine *machine, unsigned char byte)
 
     case BCC1_OK:
         int temp = state_machine_BCC1_OK(machine, byte);
-        if (machine->type == READ && temp == 0)
-            return 0; // Return 0 to send REJ frame.
+        status = status == 0 ? status : temp;
         break;
 
     case STP:
@@ -244,8 +244,8 @@ int state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte)
                     }
                     else // Invalid escape sequence
                     {
-                        machine->state = START;
-                        return 0; // TODO Does the protocol work like this????? // Return 0 to send REJ frame.
+                        // machine->state = START;
+                        return 0; // Return 0 to send REJ frame.
                     }
 
                     machine->buf_size++;

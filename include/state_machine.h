@@ -1,3 +1,5 @@
+#include "link_layer.h"
+
 // States of state machine
 enum state_machine_state
 {
@@ -22,7 +24,7 @@ struct state_machine
     unsigned char control_byte;
     unsigned char address_byte;
     enum state_machine_state state;
-    unsigned char buf[512]; // It's bigger than 256 to account for byte stuffing - TODO CHANGE THIS LATER - Make it dynamic ???
+    unsigned char buf[MAX_PAYLOAD_SIZE * 2 + 2];
     int buf_size;
     unsigned char escape_sequence;
 };

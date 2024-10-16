@@ -205,8 +205,7 @@ int frame_number = 0;
 
 int send_frame(const unsigned char *buf, int bufSize)
 {
-    // Is this correct ????
-    unsigned char frame[bufSize * 2 + 6]; // Extra space for stuffing 4 header bytes (F; A; C; BCC1) + 2 trailer bytes (BCC2 and F)
+    unsigned char frame[(bufSize + 1) * 2 + 5]; // (data_size + BCC2) * 2 + (F; A; C; BCC1) + F
     int frame_size = 0;
 
     frame[frame_size++] = FLAG;
@@ -338,7 +337,7 @@ int llwrite(const unsigned char *buf, int bufSize)
                     alarm(0);
                     alarmEnabled = FALSE;
 
-                    attempt = 1; // TODO Is this correct ????
+                    attempt = 0;
 
                     break; // Send frame again
                 }

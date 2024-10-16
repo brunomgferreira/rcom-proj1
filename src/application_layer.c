@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAX_PACKET_SIZE 256 // Make this dynamic later using the baudRate
 #define START 1
 #define DATA 2
 #define END 3
@@ -14,7 +13,7 @@
 
 int send_control_packet(int control_byte, const char *filename, int file_size)
 {
-    unsigned char packet[MAX_PACKET_SIZE]; // 4 header bytes (F; A; C; BCC1) + 2 trailer bytes (BCC2 and F)
+    unsigned char packet[MAX_PAYLOAD_SIZE];
     int packet_size = 0;
 
     packet[packet_size++] = control_byte; // Control field
@@ -28,7 +27,7 @@ int send_control_packet(int control_byte, const char *filename, int file_size)
     // filename
     packet[packet_size++] = FILE_NAME;        // T
     packet[packet_size++] = strlen(filename); // L (Length of V)
-    printf("Filename: %s", filename);
+    // printf("Filename: %s\n", filename);
     memcpy(&packet[packet_size], filename, strlen(filename)); // V
     packet_size += strlen(filename);
 
@@ -88,7 +87,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         // keep doing this until
         // READ **END** CONTROL PACKET
 
-        unsigned char control_packet[MAX_PACKET_SIZE];
+        unsigned char control_packet[MAX_PAYLOAD_SIZE];
         int bytes_read = llread(control_packet); // Read the start control packet
 
         if (bytes_read < 0)
@@ -134,7 +133,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             }
 
             // Read data packets
-            unsigned char data_packet[MAX_PACKET_SIZE];
+            unsigned char data_packet[MAX_PAYLOAD_SIZE];
             int total_received = 0;
 
             while (1)
@@ -161,8 +160,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
                     if (K + 4 > bytes_read)
                     {
+                        // If link_layer is correct, this will never happen
                         printf("Packet size mismatch, expected %d bytes but got %d.\n", K + 4, bytes_read);
-                        continue; // What to do in this situation ??????
                     }
 
                     // Write data to file
@@ -204,13 +203,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
         send_control_packet(START, filename, file_size);
 
-        unsigned char packet[MAX_PACKET_SIZE]; // IS THIS CORRECT ????
+        unsigned char packet[MAX_PAYLOAD_SIZE];
         int bytes_read;
         int sequence_number = 0;
 
-        while ((bytes_read = fread(packet, 1, MAX_PACKET_SIZE, file)) > 0)
+        while ((bytes_read = fread(packet, 1, MAX_PAYLOAD_SIZE - 4, file)) > 0)
         {
-            unsigned char data_packet[MAX_PACKET_SIZE + 4]; // IS THIS CORRECT ????
+            unsigned char data_packet[MAX_PAYLOAD_SIZE];
             int packet_size = 0;
 
             data_packet[packet_size++] = DATA;
