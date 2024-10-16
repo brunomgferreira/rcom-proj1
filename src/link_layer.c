@@ -205,22 +205,72 @@ int frame_number = 0;
 
 int send_frame(const unsigned char *buf, int bufSize)
 {
-    unsigned char frame[bufSize + 6]; // 4 header bytes (F; A; C; BCC1) + 2 trailer bytes (BCC2 and F)
+    // Is this correct ????
+    unsigned char frame[bufSize * 2 + 6]; // Extra space for stuffing 4 header bytes (F; A; C; BCC1) + 2 trailer bytes (BCC2 and F)
+    int frame_size = 0;
 
-    frame[0] = FLAG;
-    frame[1] = SENDER_ADDRESS;
-    frame[2] = (frame_number == 0) ? I_FRAME_0 : I_FRAME_1;
-    frame[3] = frame[1] ^ frame[2];
-    memcpy(&frame[4], buf, bufSize);
+    frame[frame_size++] = FLAG;
+    frame[frame_size++] = SENDER_ADDRESS;
+    frame[frame_size++] = (frame_number == 0) ? I_FRAME_0 : I_FRAME_1;
+    frame[frame_size++] = frame[1] ^ frame[2];
 
     unsigned char BCC2 = buf[0];
+
+    switch (buf[0])
+    {
+    case FLAG:
+        frame[frame_size++] = ESC;
+        frame[frame_size++] = 0x5E;
+        break;
+    case ESC:
+        frame[frame_size++] = ESC;
+        frame[frame_size++] = 0x5D;
+        break;
+    default:
+        frame[frame_size++] = buf[0];
+        break;
+    }
+
     for (int i = 1; i < bufSize; i++)
+    {
+        switch (buf[i])
+        {
+        case FLAG:
+            frame[frame_size++] = ESC;
+            frame[frame_size++] = 0x5E;
+            break;
+        case ESC:
+            frame[frame_size++] = ESC;
+            frame[frame_size++] = 0x5D;
+            break;
+        default:
+            frame[frame_size++] = buf[i];
+            break;
+        }
+
         BCC2 ^= buf[i];
+    }
 
-    frame[bufSize + 4] = BCC2;
-    frame[bufSize + 5] = FLAG;
+    switch (BCC2)
+    {
+    case FLAG:
+        frame[frame_size++] = ESC;
+        frame[frame_size++] = 0x5E;
+        break;
+    case ESC:
+        frame[frame_size++] = ESC;
+        frame[frame_size++] = 0x5D;
+        break;
+    default:
+        frame[frame_size++] = BCC2;
+        break;
+    }
 
-    if (safe_write(frame, bufSize + 6) < 0)
+    frame[frame_size++] = FLAG;
+
+    // printf("BCC2: 0x%02x\n", BCC2);
+
+    if (safe_write(frame, frame_size) < 0)
     {
         printf("Failed to send frame %d!\n", frame_number);
         return -1;
@@ -347,8 +397,6 @@ int send_REJ()
     buf[2] = frame_number == 0 ? REJ0 : REJ1;
     buf[3] = buf[1] ^ buf[2];
     buf[4] = FLAG;
-
-    printf("BCC1: 0x%02x\n", buf[1] ^ buf[2]);
 
     if (safe_write(buf, BUF_SIZE) < 0)
     {
