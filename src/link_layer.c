@@ -424,8 +424,9 @@ int llread(unsigned char *packet)
             int status = state_machine(&machine, byte);
             // printf("State: %d, Status %d\n", machine.state, status);
 
-            if (status == 0)
+            if (machine.state == STP && status == 0)
             {
+                // printf("State: %d, Status %d, Received byte: 0x%02x\n", machine.state, status, byte);
                 if (send_REJ() < 0) // Failed to send REJ command
                     return -1;
 

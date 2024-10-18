@@ -229,7 +229,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             if (bytes_written < 0)
             {
                 printf("Failed to send data packet.\n");
-                break;
+                break; // TODO Change this logic: Don't execute the send_control_packet() after break!
             }
 
             printf("Sent %d bytes.\n", bytes_written);
