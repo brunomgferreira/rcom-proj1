@@ -14,10 +14,187 @@
 
 int timeout = 0;
 int nRetransmissions = 0;
+int frame_number = 0;
+
+int safe_write(const unsigned char *bytes, int num_bytes);
+int send_set();
+int send_ack();
+int llopen_receiver();
+int llopen_transmitter();
+int send_data_frame(const unsigned char *buf, int buf_size);
+int send_RR();
+int send_REJ();
 
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
+int llopen(LinkLayer connectionParameters)
+{
+    if (openSerialPort(connectionParameters.serialPort,
+                       connectionParameters.baudRate) < 0)
+    {
+        return -1;
+    }
+
+    timeout = connectionParameters.timeout;
+    nRetransmissions = connectionParameters.nRetransmissions;
+
+    switch (connectionParameters.role)
+    {
+    case LlRx: // Receiver
+        if (llopen_receiver() < 0)
+            return -1;
+        break;
+    case LlTx: // Transmitter
+        if (llopen_transmitter() < 0)
+            return -1;
+        break;
+    default:
+        return -1;
+    }
+
+    return 1;
+}
+
+////////////////////////////////////////////////
+// LLWRITE
+////////////////////////////////////////////////
+int llwrite(const unsigned char *buf, int bufSize)
+{
+    struct state_machine machine;
+    create_state_machine(&machine, WRITE, (frame_number == 0 ? RR0 : RR1), RECEIVER_ADDRESS, START);
+
+    unsigned int attempt = 0;
+    extern int alarm_enabled;
+    extern int alarm_count;
+    alarm_count = 0; // Reset alarm count
+
+    (void)signal(SIGALRM, alarm_handler);
+
+    while (attempt < nRetransmissions)
+    {
+        attempt++;
+        // printf("Attempt #%d\n", attempt);
+
+        if (send_data_frame(buf, bufSize) < 0) // Failed to send frame
+        {
+            // printf("Error sending frame %d. Retrying...\n", frame_number);
+            continue; // Retry sending frame if it fails
+        }
+
+        alarm(timeout);
+        alarm_enabled = TRUE;
+        machine.state = START;
+
+        while (alarm_enabled)
+        {
+            unsigned char byte = 0;
+            int read_byte = readByteSerialPort(&byte);
+
+            if (read_byte == 0)
+            {
+                continue; // 0 bytes read
+            }
+            else if (read_byte < 0)
+            {
+                printf("Read ERROR!");
+                return -1;
+            }
+
+            // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+            int status = state_machine(&machine, byte);
+            if (machine.state == STP && status > 0)
+            {
+                // printf("RR%d was received!\n", frame_number);
+                alarm(0);
+                alarm_enabled = FALSE;
+                frame_number = 1 - frame_number;
+                return bufSize;
+            }
+            else if (machine.state == STP && status == 0)
+            {
+                // printf("REJ%d was received!\n", frame_number);
+                alarm(0);
+                alarm_enabled = FALSE;
+                attempt = 0;
+                break; // Send frame again
+            }
+        }
+        if (!alarm_enabled && alarm_count > 0)
+        {
+            // printf("No RR received, retrying...\n");
+        }
+    }
+    printf("Failed to send frame after %d attempts\n", nRetransmissions);
+    return -1;
+}
+
+////////////////////////////////////////////////
+// LLREAD
+////////////////////////////////////////////////
+int llread(unsigned char *packet)
+{
+    struct state_machine machine;
+    create_state_machine(&machine, READ, (frame_number == 0 ? I_FRAME_0 : I_FRAME_1), TRANSMITTER_ADDRESS, START);
+
+    do
+    {
+        unsigned char byte = 0;
+        int read_byte = readByteSerialPort(&byte);
+
+        if (read_byte == 0)
+        {
+            continue; // 0 bytes read
+        }
+        else if (read_byte < 0)
+        {
+            printf("Read ERROR!");
+            return -1;
+        }
+
+        // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+        int status = state_machine(&machine, byte);
+        if (machine.state == STP)
+        {
+            if (status == 0)
+            {
+                if (send_REJ() < 0) // Failed to send REJ command
+                    return -1;
+
+                machine.state = START; // Reset state for next frame
+            }
+            else
+            {
+                // printf("Frame %d received!\n", frame_number);
+                break; // Frame received successfully
+            }
+        }
+    } while (machine.state != STP);
+
+    if (send_RR() < 0) // Failed to send RR command
+        return -1;
+
+    memcpy(packet, machine.buf, machine.buf_size); // Copy received packet
+    frame_number = 1 - frame_number;               // Switch frame number
+
+    return machine.buf_size;
+}
+
+////////////////////////////////////////////////
+// LLCLOSE
+////////////////////////////////////////////////
+int llclose(int showStatistics)
+{
+    // TODO
+
+    int clstat = closeSerialPort();
+    return clstat;
+}
+
+////////////////////////////////////////////////
+// HELPER FUNCTIONS
+////////////////////////////////////////////////
+
 int safe_write(const unsigned char *bytes, int num_bytes)
 {
     int total_bytes_written = 0;
@@ -41,7 +218,7 @@ int safe_write(const unsigned char *bytes, int num_bytes)
 
 int send_set()
 {
-    unsigned char buf[5] = {FLAG, SENDER_ADDRESS, SET, 0, FLAG};
+    unsigned char buf[5] = {FLAG, TRANSMITTER_ADDRESS, SET, 0, FLAG};
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
     if (safe_write(buf, 5) < 0)
@@ -50,7 +227,7 @@ int send_set()
         return -1;
     }
 
-    printf("SET sent!\n");
+    // printf("SET sent!\n");
 
     return 1;
 }
@@ -66,114 +243,96 @@ int send_ack()
         return -1;
     }
 
-    printf("ACK sent!\n");
+    // printf("ACK sent!\n");
 
     return 1;
 }
 
-int llopen(LinkLayer connectionParameters)
+int llopen_receiver()
 {
-    if (openSerialPort(connectionParameters.serialPort,
-                       connectionParameters.baudRate) < 0)
-    {
-        return -1;
-    }
-
-    timeout = connectionParameters.timeout;
-    nRetransmissions = connectionParameters.nRetransmissions;
-
     struct state_machine machine;
-    create_state_machine(&machine,
-                         CONNECTION,
-                         (connectionParameters.role == LlRx) ? SET : UA,
-                         (connectionParameters.role == LlRx) ? SENDER_ADDRESS : RECEIVER_ADDRESS,
-                         START);
+    create_state_machine(&machine, CONNECTION, SET, TRANSMITTER_ADDRESS, START);
 
-    if (connectionParameters.role == LlRx) // Reader
+    do
     {
-        do
+        unsigned char byte = 0;
+        int read_byte = readByteSerialPort(&byte);
+
+        if (read_byte > 0)
+        {
+            // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+            state_machine(&machine, byte);
+        }
+        else if (read_byte < 0)
+        {
+            printf("Read ERROR!");
+            return -1;
+        }
+    } while (machine.state != STP);
+
+    return send_ack();
+}
+
+int llopen_transmitter()
+{
+    struct state_machine machine;
+    create_state_machine(&machine, CONNECTION, UA, RECEIVER_ADDRESS, START);
+
+    unsigned int attempt = 0;
+    extern int alarm_enabled;
+    extern int alarm_count;
+    alarm_count = 0; // Reset alarm count
+    (void)signal(SIGALRM, alarm_handler);
+
+    while (attempt < nRetransmissions)
+    {
+        attempt++;
+        // printf("Attempt #%d\n", attempt);
+
+        if (send_set() < 0)
+        {
+            // printf("Error sending SET. Retrying...\n");
+            continue; // Retry sending SET if it fails
+        }
+
+        alarm(timeout);
+        alarm_enabled = TRUE;
+        machine.state = START;
+
+        while (alarm_enabled)
         {
             unsigned char byte = 0;
             int read_byte = readByteSerialPort(&byte);
 
-            if (read_byte > 0)
+            if (read_byte == 0)
             {
-                printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
-                state_machine(&machine, byte);
+                continue; // 0 bytes read
             }
             else if (read_byte < 0)
             {
                 printf("Read ERROR!");
                 return -1;
             }
-        } while (machine.state != STP);
 
-        return send_ack();
-    }
-    else // Writer
-    {
-        unsigned int attempt = 0;
-        extern int alarm_enabled;
-        extern int alarm_count;
-        alarm_count = 0; // Reset alarm count
-        (void)signal(SIGALRM, alarm_handler);
+            // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+            state_machine(&machine, byte);
 
-        while (attempt < nRetransmissions)
-        {
-            attempt++;
-            printf("Attempt #%d\n", attempt);
-
-            if (send_set() < 0)
+            if (machine.state == STP)
             {
-                printf("Error sending SET. Retrying...\n");
-                continue; // Retry sending SET if it fails
-            }
-
-            alarm(timeout);
-            alarm_enabled = TRUE;
-            machine.state = START;
-
-            while (alarm_enabled)
-            {
-                unsigned char byte = 0;
-                int read_byte = readByteSerialPort(&byte);
-
-                if (read_byte == 0)
-                {
-                    continue; // 0 bytes read
-                }
-                else if (read_byte < 0)
-                {
-                    printf("Read ERROR!");
-                    return -1;
-                }
-
-                printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
-                state_machine(&machine, byte);
-
-                if (machine.state == STP)
-                {
-                    printf("ACK was received!\n");
-                    alarm(0);
-                    alarm_enabled = FALSE;
-                    return 1;
-                }
-            }
-            if (!alarm_enabled && alarm_count > 0)
-            {
-                printf("No ACK received, retrying...\n");
+                // printf("ACK was received!\n");
+                alarm(0);
+                alarm_enabled = FALSE;
+                return 1;
             }
         }
-        printf("Failed to establish connection after %d attempts\n", nRetransmissions);
-        return -1;
+        if (!alarm_enabled && alarm_count > 0)
+        {
+            // printf("No ACK received, retrying...\n");
+        }
     }
+    // printf("Failed to establish connection after %d attempts\n", nRetransmissions);
+    return -1;
 }
-
-////////////////////////////////////////////////
-// LLWRITE
-////////////////////////////////////////////////
-
-int frame_number = 0;
 
 int send_data_frame(const unsigned char *buf, int buf_size)
 {
@@ -181,7 +340,7 @@ int send_data_frame(const unsigned char *buf, int buf_size)
     int frame_size = 0;
 
     frame[frame_size++] = FLAG;
-    frame[frame_size++] = SENDER_ADDRESS;
+    frame[frame_size++] = TRANSMITTER_ADDRESS;
     frame[frame_size++] = (frame_number == 0) ? I_FRAME_0 : I_FRAME_1;
     frame[frame_size++] = frame[1] ^ frame[2]; // Calculate BCC1
 
@@ -229,84 +388,10 @@ int send_data_frame(const unsigned char *buf, int buf_size)
         return -1;
     }
 
-    printf("Frame %d sent!\n", frame_number);
+    // printf("Frame %d sent!\n", frame_number);
     return 1;
 }
 
-int llwrite(const unsigned char *buf, int bufSize)
-{
-    struct state_machine machine;
-    create_state_machine(&machine, WRITE, (frame_number == 0 ? RR0 : RR1), RECEIVER_ADDRESS, START);
-
-    unsigned int attempt = 0;
-    extern int alarm_enabled;
-    extern int alarm_count;
-    alarm_count = 0; // Reset alarm count
-
-    (void)signal(SIGALRM, alarm_handler);
-
-    while (attempt < nRetransmissions)
-    {
-        attempt++;
-        printf("Attempt #%d\n", attempt);
-
-        if (send_data_frame(buf, bufSize) < 0) // Failed to send frame
-        {
-            printf("Error sending frame %d. Retrying...\n", frame_number);
-            continue; // Retry sending frame if it fails
-        }
-
-        alarm(timeout);
-        alarm_enabled = TRUE;
-        machine.state = START;
-
-        while (alarm_enabled)
-        {
-            unsigned char byte = 0;
-            int read_byte = readByteSerialPort(&byte);
-
-            if (read_byte == 0)
-            {
-                continue; // 0 bytes read
-            }
-            else if (read_byte < 0)
-            {
-                printf("Read ERROR!");
-                return -1;
-            }
-
-            // printf("State: %d, Received byte: 0x%02x - ", machine.state, byte);
-            int status = state_machine(&machine, byte);
-            // printf("State: %d, Status: %d\n", machine.state, status);
-            if (machine.state == STP && status > 0)
-            {
-                printf("RR%d was received!\n", frame_number);
-                alarm(0);
-                alarm_enabled = FALSE;
-                frame_number = 1 - frame_number;
-                return bufSize;
-            }
-            else if (machine.state == STP && status == 0)
-            {
-                printf("REJ%d was received!\n", frame_number);
-                alarm(0);
-                alarm_enabled = FALSE;
-                attempt = 0;
-                break; // Send frame again
-            }
-        }
-        if (!alarm_enabled && alarm_count > 0)
-        {
-            printf("No ACK received, retrying...\n");
-        }
-    }
-    printf("Failed to send frame after %d attempts\n", nRetransmissions);
-    return -1;
-}
-
-////////////////////////////////////////////////
-// LLREAD
-////////////////////////////////////////////////
 int send_RR()
 {
     unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, frame_number == 0 ? RR0 : RR1, 0, FLAG};
@@ -318,7 +403,7 @@ int send_RR()
         return -1;
     }
 
-    printf("RR%d sent!\n", frame_number);
+    // printf("RR%d sent!\n", frame_number);
 
     return 1;
 }
@@ -334,68 +419,7 @@ int send_REJ()
         return -1;
     }
 
-    printf("REJ%d sent!\n", frame_number);
+    // printf("REJ%d sent!\n", frame_number);
 
     return 1;
-}
-
-int llread(unsigned char *packet)
-{
-    struct state_machine machine;
-    create_state_machine(&machine, READ, (frame_number == 0 ? I_FRAME_0 : I_FRAME_1), SENDER_ADDRESS, START);
-
-    do
-    {
-        unsigned char byte = 0;
-        int read_byte = readByteSerialPort(&byte);
-
-        if (read_byte == 0)
-        {
-            continue; // 0 bytes read
-        }
-        else if (read_byte < 0)
-        {
-            printf("Read ERROR!");
-            return -1;
-        }
-
-        // printf("State: %d, Received byte: 0x%02x - ", machine.state, byte);
-        int status = state_machine(&machine, byte);
-        // printf("State: %d, Status %d\n", machine.state, status);
-
-        if (machine.state == STP)
-        {
-            if (status == 0)
-            {
-                if (send_REJ() < 0) // Failed to send REJ command
-                    return -1;
-
-                machine.state = START; // Reset state for next frame
-            }
-            else
-            {
-                printf("Frame %d received!\n", frame_number);
-                break; // Frame received successfully
-            }
-        }
-    } while (machine.state != STP);
-
-    if (send_RR() < 0) // Failed to send RR command
-        return -1;
-
-    memcpy(packet, machine.buf, machine.buf_size); // Copy received packet
-    frame_number = 1 - frame_number;               // Switch frame number
-
-    return machine.buf_size;
-}
-
-////////////////////////////////////////////////
-// LLCLOSE
-////////////////////////////////////////////////
-int llclose(int showStatistics)
-{
-    // TODO
-
-    int clstat = closeSerialPort();
-    return clstat;
 }

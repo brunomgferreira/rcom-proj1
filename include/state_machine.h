@@ -32,7 +32,7 @@ struct state_machine
 };
 
 #define FLAG 0x7E
-#define SENDER_ADDRESS 0x03
+#define TRANSMITTER_ADDRESS 0x03
 #define RECEIVER_ADDRESS 0x01
 #define SET 0x03
 #define UA 0x07
