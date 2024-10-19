@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-int create_state_machine(struct state_machine *machine, enum state_machine_type type, unsigned char control_byte, unsigned char address_byte, enum state_machine_state state)
+void create_state_machine(struct state_machine *machine, enum state_machine_type type, unsigned char control_byte, unsigned char address_byte, enum state_machine_state state)
 {
     machine->type = type;
     machine->control_byte = control_byte;
@@ -10,23 +10,22 @@ int create_state_machine(struct state_machine *machine, enum state_machine_type 
     machine->state = state;
     memset(machine->buf, 0, sizeof(machine->buf));
     machine->REJ = 0;
+    machine->ACK = 0;
     machine->buf_size = 0;
     machine->escape_sequence = 0;
-
-    return 1;
 }
 
-int state_machine(struct state_machine *machine, unsigned char byte)
+void state_machine(struct state_machine *machine, unsigned char byte)
 {
     switch (machine->state)
     {
     case START:
-        machine->REJ = 0;
         state_machine_START(machine, byte);
         break;
 
     case FLAG_RCV:
         machine->REJ = 0;
+        machine->ACK = 0;
         machine->BCC2 = 0;
         state_machine_FLAG_RCV(machine, byte);
         break;
@@ -46,21 +45,17 @@ int state_machine(struct state_machine *machine, unsigned char byte)
     case STP:
         break;
     }
-
-    return !machine->REJ; // Return 0 if REJ otherwise 1
 }
 
-int state_machine_START(struct state_machine *machine, unsigned char byte)
+void state_machine_START(struct state_machine *machine, unsigned char byte)
 {
     if (byte == FLAG)
     {
         machine->state = FLAG_RCV;
     }
-
-    return 1;
 }
 
-int state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte)
+void state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte)
 {
     if (byte == machine->address_byte)
     {
@@ -70,13 +65,10 @@ int state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte)
     {
         machine->state = START;
     }
-
-    return 1;
 }
 
-int state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
+void state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
 {
-
     if (byte == machine->control_byte)
     {
         machine->state = C_RCV;
@@ -88,6 +80,11 @@ int state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
         machine->state = C_RCV;
         machine->REJ = 1; // REJ received
     }
+    else if (machine->type == READ && byte == SET)
+    {
+        machine->state = C_RCV;
+        machine->ACK = 1; // SET received
+    }
     else if (byte == FLAG)
     {
         machine->state = FLAG_RCV;
@@ -96,16 +93,15 @@ int state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
     {
         machine->state = START;
     }
-
-    return 1;
 }
 
-int state_machine_C_RCV(struct state_machine *machine, unsigned char byte)
+void state_machine_C_RCV(struct state_machine *machine, unsigned char byte)
 {
     if ((machine->type == WRITE &&
          ((machine->control_byte == RR0 && byte == (machine->address_byte ^ REJ0)) ||
           (machine->control_byte == RR1 && byte == (machine->address_byte ^ REJ1)))) ||
-        byte == (machine->address_byte ^ machine->control_byte))
+        byte == (machine->address_byte ^ machine->control_byte) ||
+        (machine->type == READ && machine->ACK && byte == (machine->address_byte ^ SET)))
     {
         machine->buf_size = 0;
         machine->state = BCC1_OK;
@@ -118,13 +114,11 @@ int state_machine_C_RCV(struct state_machine *machine, unsigned char byte)
     {
         machine->state = START;
     }
-
-    return 1;
 }
 
-int state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte)
+void state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte)
 {
-    if (machine->type == READ)
+    if (machine->type == READ && !machine->ACK)
     {
         process_read_BCC1_OK(machine, byte);
     }
@@ -136,8 +130,6 @@ int state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte)
     {
         machine->state = START;
     }
-
-    return 1;
 }
 
 void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte)

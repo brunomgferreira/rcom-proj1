@@ -29,6 +29,7 @@ struct state_machine
     unsigned char BCC2;
     unsigned char escape_sequence;
     unsigned char REJ;
+    unsigned char ACK;
 };
 
 #define FLAG 0x7E
@@ -44,11 +45,11 @@ struct state_machine
 #define REJ0 0x54
 #define REJ1 0x55
 
-int create_state_machine(struct state_machine *machine, enum state_machine_type type, unsigned char control_byte, unsigned char address_byte, enum state_machine_state state);
+void create_state_machine(struct state_machine *machine, enum state_machine_type type, unsigned char control_byte, unsigned char address_byte, enum state_machine_state state);
 void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte);
-int state_machine(struct state_machine *machine, unsigned char byte);
-int state_machine_START(struct state_machine *machine, unsigned char byte);
-int state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte);
-int state_machine_A_RCV(struct state_machine *machine, unsigned char byte);
-int state_machine_C_RCV(struct state_machine *machine, unsigned char byte);
-int state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte);
+void state_machine(struct state_machine *machine, unsigned char byte);
+void state_machine_START(struct state_machine *machine, unsigned char byte);
+void state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte);
+void state_machine_A_RCV(struct state_machine *machine, unsigned char byte);
+void state_machine_C_RCV(struct state_machine *machine, unsigned char byte);
+void state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte);

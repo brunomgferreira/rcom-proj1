@@ -17,8 +17,8 @@ int nRetransmissions = 0;
 int frame_number = 0;
 
 int safe_write(const unsigned char *bytes, int num_bytes);
-int send_set();
-int send_ack();
+int send_SET();
+int send_ACK();
 int llopen_receiver();
 int llopen_transmitter();
 int send_data_frame(const unsigned char *buf, int buf_size);
@@ -102,22 +102,22 @@ int llwrite(const unsigned char *buf, int bufSize)
             }
 
             // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
-            int status = state_machine(&machine, byte);
-            if (machine.state == STP && status > 0)
-            {
-                // printf("RR%d was received!\n", frame_number);
-                alarm(0);
-                alarm_enabled = FALSE;
-                frame_number = 1 - frame_number;
-                return bufSize;
-            }
-            else if (machine.state == STP && status == 0)
+            state_machine(&machine, byte);
+            if (machine.state == STP && machine.REJ)
             {
                 // printf("REJ%d was received!\n", frame_number);
                 alarm(0);
                 alarm_enabled = FALSE;
                 attempt = 0;
                 break; // Send frame again
+            }
+            else if (machine.state == STP)
+            {
+                // printf("RR%d was received!\n", frame_number);
+                alarm(0);
+                alarm_enabled = FALSE;
+                frame_number = 1 - frame_number;
+                return bufSize;
             }
         }
         if (!alarm_enabled && alarm_count > 0)
@@ -136,7 +136,7 @@ int llread(unsigned char *packet)
 {
     struct state_machine machine;
     create_state_machine(&machine, READ, (frame_number == 0 ? I_FRAME_0 : I_FRAME_1), TRANSMITTER_ADDRESS, START);
-
+    int frames_received = 0;
     do
     {
         unsigned char byte = 0;
@@ -153,21 +153,27 @@ int llread(unsigned char *packet)
         }
 
         // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
-        int status = state_machine(&machine, byte);
-        if (machine.state == STP)
-        {
-            if (status == 0)
-            {
-                if (send_REJ() < 0) // Failed to send REJ command
-                    return -1;
+        state_machine(&machine, byte);
 
-                machine.state = START; // Reset state for next frame
-            }
-            else
-            {
-                // printf("Frame %d received!\n", frame_number);
-                break; // Frame received successfully
-            }
+        if (machine.state == STP && machine.ACK && frames_received == 0)
+        {
+            if (send_ACK() < 0)
+                return -1;
+
+            machine.state = START;
+        }
+        else if (machine.state == STP && machine.REJ)
+        {
+            if (send_REJ() < 0) // Failed to send REJ command
+                return -1;
+
+            machine.state = START; // Reset state for next frame
+        }
+        else if (machine.state == STP)
+        {
+            // printf("Frame %d received!\n", frame_number);
+            frames_received++;
+            break; // Frame received successfully
         }
     } while (machine.state != STP);
 
@@ -216,7 +222,7 @@ int safe_write(const unsigned char *bytes, int num_bytes)
     return total_bytes_written;
 }
 
-int send_set()
+int send_SET()
 {
     unsigned char buf[5] = {FLAG, TRANSMITTER_ADDRESS, SET, 0, FLAG};
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
@@ -232,7 +238,7 @@ int send_set()
     return 1;
 }
 
-int send_ack()
+int send_ACK()
 {
     unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, UA, 0, FLAG};
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
@@ -270,7 +276,7 @@ int llopen_receiver()
         }
     } while (machine.state != STP);
 
-    return send_ack();
+    return send_ACK();
 }
 
 int llopen_transmitter()
@@ -289,7 +295,7 @@ int llopen_transmitter()
         attempt++;
         // printf("Attempt #%d\n", attempt);
 
-        if (send_set() < 0)
+        if (send_SET() < 0)
         {
             // printf("Error sending SET. Retrying...\n");
             continue; // Retry sending SET if it fails
