@@ -44,11 +44,7 @@ int state_machine(struct state_machine *machine, unsigned char byte)
         break;
 
     case STP:
-        return !machine->REJ;
-
-    default:
-        printf("state_machine() ERROR!");
-        return -1;
+        break;
     }
 
     return !machine->REJ; // Return 0 if REJ otherwise 1

@@ -24,16 +24,16 @@ int safe_write(const unsigned char *bytes, int num_bytes)
 
     while (total_bytes_written < num_bytes)
     {
-        int bytesToWrite = num_bytes - total_bytes_written;
-        int bytesWritten = writeBytesSerialPort(bytes + total_bytes_written, bytesToWrite);
+        int bytes_to_write = num_bytes - total_bytes_written;
+        int bytes_written = writeBytesSerialPort(bytes + total_bytes_written, bytes_to_write);
 
-        if (bytesWritten < 0)
+        if (bytes_written < 0)
         {
             printf("ERROR writing to serial port!\n");
             return -1; // Indicate an error occurred
         }
 
-        total_bytes_written += bytesWritten;
+        total_bytes_written += bytes_written;
     }
 
     return total_bytes_written;
@@ -41,19 +41,10 @@ int safe_write(const unsigned char *bytes, int num_bytes)
 
 int send_set()
 {
-    const int BUF_SIZE = 5;
-    unsigned char buf[BUF_SIZE + 1];
-    memset(buf, 0, sizeof(buf)); // Initialize to zero
+    unsigned char buf[5] = {FLAG, SENDER_ADDRESS, SET, 0, FLAG};
+    buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
-    // ESTABLISH CONNECTION
-    // SEND SET
-    buf[0] = FLAG;
-    buf[1] = SENDER_ADDRESS;
-    buf[2] = SET;
-    buf[3] = buf[1] ^ buf[2];
-    buf[4] = FLAG;
-
-    if (safe_write(buf, BUF_SIZE) < 0)
+    if (safe_write(buf, 5) < 0)
     {
         printf("Failed to send SET command.\n");
         return -1;
@@ -66,19 +57,10 @@ int send_set()
 
 int send_ack()
 {
-    const int BUF_SIZE = 5;
-    unsigned char buf[BUF_SIZE + 1];
-    memset(buf, 0, sizeof(buf)); // Initialize to zero
+    unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, UA, 0, FLAG};
+    buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
-    // ESTABLISH CONNECTION
-    // SEND UA
-    buf[0] = FLAG;
-    buf[1] = RECEIVER_ADDRESS;
-    buf[2] = UA;
-    buf[3] = buf[1] ^ buf[2];
-    buf[4] = FLAG;
-
-    if (safe_write(buf, BUF_SIZE) < 0)
+    if (safe_write(buf, 5) < 0)
     {
         printf("Failed to send ACK command.\n");
         return -1;
@@ -100,15 +82,15 @@ int llopen(LinkLayer connectionParameters)
     timeout = connectionParameters.timeout;
     nRetransmissions = connectionParameters.nRetransmissions;
 
-    const int BUF_SIZE = 5;
-    unsigned char buf[BUF_SIZE + 1];
-    memset(buf, 0, sizeof(buf)); // Initialize to zero
+    struct state_machine machine;
+    create_state_machine(&machine,
+                         CONNECTION,
+                         (connectionParameters.role == LlRx) ? SET : UA,
+                         (connectionParameters.role == LlRx) ? SENDER_ADDRESS : RECEIVER_ADDRESS,
+                         START);
 
     if (connectionParameters.role == LlRx) // Reader
     {
-        struct state_machine machine;
-        create_state_machine(&machine, CONNECTION, SET, SENDER_ADDRESS, START);
-
         do
         {
             unsigned char byte = 0;
@@ -126,22 +108,17 @@ int llopen(LinkLayer connectionParameters)
             }
         } while (machine.state != STP);
 
-        if (send_ack() < 0) // Failed to send ACK command
-            return -1;
+        return send_ack();
     }
-    else if (connectionParameters.role == LlTx) // Writer
+    else // Writer
     {
-        struct state_machine machine;
-        create_state_machine(&machine, CONNECTION, UA, RECEIVER_ADDRESS, START);
-
         unsigned int attempt = 0;
-        extern int alarmEnabled;
-        extern int alarmCount;
-        alarmCount = 0; // Reset alarm count
+        extern int alarm_enabled;
+        extern int alarm_count;
+        alarm_count = 0; // Reset alarm count
+        (void)signal(SIGALRM, alarm_handler);
 
-        (void)signal(SIGALRM, alarmHandler);
-
-        while (attempt < connectionParameters.nRetransmissions)
+        while (attempt < nRetransmissions)
         {
             attempt++;
             printf("Attempt #%d\n", attempt);
@@ -152,49 +129,44 @@ int llopen(LinkLayer connectionParameters)
                 continue; // Retry sending SET if it fails
             }
 
-            alarm(connectionParameters.timeout);
-            alarmEnabled = TRUE;
-
+            alarm(timeout);
+            alarm_enabled = TRUE;
             machine.state = START;
 
-            while (alarmEnabled)
+            while (alarm_enabled)
             {
                 unsigned char byte = 0;
                 int read_byte = readByteSerialPort(&byte);
 
-                if (read_byte > 0)
+                if (read_byte == 0)
                 {
-                    printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
-                    state_machine(&machine, byte);
-
-                    if (machine.state == STP)
-                    {
-                        printf("ACK was received!\n");
-
-                        alarm(0);
-                        alarmEnabled = FALSE;
-
-                        return 1;
-                    }
+                    continue; // 0 bytes read
                 }
                 else if (read_byte < 0)
                 {
                     printf("Read ERROR!");
                     return -1;
                 }
-            }
 
-            if (!alarmEnabled && alarmCount > 0)
+                printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+                state_machine(&machine, byte);
+
+                if (machine.state == STP)
+                {
+                    printf("ACK was received!\n");
+                    alarm(0);
+                    alarm_enabled = FALSE;
+                    return 1;
+                }
+            }
+            if (!alarm_enabled && alarm_count > 0)
             {
                 printf("No ACK received, retrying...\n");
             }
         }
-
-        printf("Failed to establish connection after %d attempts\n", connectionParameters.nRetransmissions);
+        printf("Failed to establish connection after %d attempts\n", nRetransmissions);
         return -1;
     }
-
-    return 1;
 }
 
 ////////////////////////////////////////////////
@@ -203,71 +175,53 @@ int llopen(LinkLayer connectionParameters)
 
 int frame_number = 0;
 
-int send_frame(const unsigned char *buf, int bufSize)
+int send_data_frame(const unsigned char *buf, int buf_size)
 {
-    unsigned char frame[(bufSize + 1) * 2 + 5]; // (data_size + BCC2) * 2 + (F; A; C; BCC1) + F
+    unsigned char frame[(buf_size + 1) * 2 + 5]; // (data_size + BCC2) * 2 + (F; A; C; BCC1) + F
     int frame_size = 0;
 
     frame[frame_size++] = FLAG;
     frame[frame_size++] = SENDER_ADDRESS;
     frame[frame_size++] = (frame_number == 0) ? I_FRAME_0 : I_FRAME_1;
-    frame[frame_size++] = frame[1] ^ frame[2];
+    frame[frame_size++] = frame[1] ^ frame[2]; // Calculate BCC1
 
-    unsigned char BCC2 = buf[0];
-
-    switch (buf[0])
+    unsigned char BCC2 = 0; // Initialize BCC2
+    for (int i = 0; i < buf_size; i++)
     {
-    case FLAG:
-        frame[frame_size++] = ESC;
-        frame[frame_size++] = 0x5E;
-        break;
-    case ESC:
-        frame[frame_size++] = ESC;
-        frame[frame_size++] = 0x5D;
-        break;
-    default:
-        frame[frame_size++] = buf[0];
-        break;
-    }
-
-    for (int i = 1; i < bufSize; i++)
-    {
-        switch (buf[i])
+        if (buf[i] == FLAG)
         {
-        case FLAG:
             frame[frame_size++] = ESC;
-            frame[frame_size++] = 0x5E;
-            break;
-        case ESC:
-            frame[frame_size++] = ESC;
-            frame[frame_size++] = 0x5D;
-            break;
-        default:
-            frame[frame_size++] = buf[i];
-            break;
+            frame[frame_size++] = 0x5E; // Escape FLAG
         }
-
-        BCC2 ^= buf[i];
+        else if (buf[i] == ESC)
+        {
+            frame[frame_size++] = ESC;
+            frame[frame_size++] = 0x5D; // Escape ESC
+        }
+        else
+        {
+            frame[frame_size++] = buf[i];
+        }
+        BCC2 ^= buf[i]; // Compute BCC2
     }
 
-    switch (BCC2)
+    // Byte Stuff BCC2
+    if (BCC2 == FLAG)
     {
-    case FLAG:
         frame[frame_size++] = ESC;
-        frame[frame_size++] = 0x5E;
-        break;
-    case ESC:
+        frame[frame_size++] = 0x5E; // Escape FLAG
+    }
+    else if (BCC2 == ESC)
+    {
         frame[frame_size++] = ESC;
-        frame[frame_size++] = 0x5D;
-        break;
-    default:
+        frame[frame_size++] = 0x5D; // Escape ESC
+    }
+    else
+    {
         frame[frame_size++] = BCC2;
-        break;
     }
 
     frame[frame_size++] = FLAG;
-
-    // printf("BCC2: 0x%02x\n", BCC2);
 
     if (safe_write(frame, frame_size) < 0)
     {
@@ -276,7 +230,6 @@ int send_frame(const unsigned char *buf, int bufSize)
     }
 
     printf("Frame %d sent!\n", frame_number);
-
     return 1;
 }
 
@@ -286,75 +239,67 @@ int llwrite(const unsigned char *buf, int bufSize)
     create_state_machine(&machine, WRITE, (frame_number == 0 ? RR0 : RR1), RECEIVER_ADDRESS, START);
 
     unsigned int attempt = 0;
-    extern int alarmEnabled;
-    extern int alarmCount;
-    alarmCount = 0; // Reset alarm count
+    extern int alarm_enabled;
+    extern int alarm_count;
+    alarm_count = 0; // Reset alarm count
 
-    (void)signal(SIGALRM, alarmHandler);
+    (void)signal(SIGALRM, alarm_handler);
 
     while (attempt < nRetransmissions)
     {
         attempt++;
         printf("Attempt #%d\n", attempt);
 
-        if (send_frame(buf, bufSize) < 0) // Failed to send frame
+        if (send_data_frame(buf, bufSize) < 0) // Failed to send frame
         {
             printf("Error sending frame %d. Retrying...\n", frame_number);
             continue; // Retry sending frame if it fails
         }
 
         alarm(timeout);
-        alarmEnabled = TRUE;
-
+        alarm_enabled = TRUE;
         machine.state = START;
 
-        while (alarmEnabled)
+        while (alarm_enabled)
         {
             unsigned char byte = 0;
             int read_byte = readByteSerialPort(&byte);
 
-            if (read_byte > 0)
+            if (read_byte == 0)
             {
-                // printf("State: %d, Received byte: 0x%02x - ", machine.state, byte);
-                int status = state_machine(&machine, byte);
-                // printf("State: %d, Status: %d\n", machine.state, status);
-
-                if (machine.state == STP && status > 0)
-                {
-                    printf("RR%d was received!\n", frame_number);
-
-                    alarm(0);
-                    alarmEnabled = FALSE;
-
-                    frame_number = 1 - frame_number;
-
-                    return bufSize;
-                }
-                else if (machine.state == STP && status == 0)
-                {
-                    printf("REJ%d was received!\n", frame_number);
-
-                    alarm(0);
-                    alarmEnabled = FALSE;
-
-                    attempt = 0;
-
-                    break; // Send frame again
-                }
+                continue; // 0 bytes read
             }
             else if (read_byte < 0)
             {
                 printf("Read ERROR!");
                 return -1;
             }
-        }
 
-        if (!alarmEnabled && alarmCount > 0)
+            // printf("State: %d, Received byte: 0x%02x - ", machine.state, byte);
+            int status = state_machine(&machine, byte);
+            // printf("State: %d, Status: %d\n", machine.state, status);
+            if (machine.state == STP && status > 0)
+            {
+                printf("RR%d was received!\n", frame_number);
+                alarm(0);
+                alarm_enabled = FALSE;
+                frame_number = 1 - frame_number;
+                return bufSize;
+            }
+            else if (machine.state == STP && status == 0)
+            {
+                printf("REJ%d was received!\n", frame_number);
+                alarm(0);
+                alarm_enabled = FALSE;
+                attempt = 0;
+                break; // Send frame again
+            }
+        }
+        if (!alarm_enabled && alarm_count > 0)
         {
             printf("No ACK received, retrying...\n");
         }
     }
-
     printf("Failed to send frame after %d attempts\n", nRetransmissions);
     return -1;
 }
@@ -364,17 +309,10 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int send_RR()
 {
-    const int BUF_SIZE = 5;
-    unsigned char buf[BUF_SIZE + 1];
-    memset(buf, 0, sizeof(buf)); // Initialize to zero
+    unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, frame_number == 0 ? RR0 : RR1, 0, FLAG};
+    buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
-    buf[0] = FLAG;
-    buf[1] = RECEIVER_ADDRESS;
-    buf[2] = frame_number == 0 ? RR0 : RR1;
-    buf[3] = buf[1] ^ buf[2];
-    buf[4] = FLAG;
-
-    if (safe_write(buf, BUF_SIZE) < 0)
+    if (safe_write(buf, 5) < 0)
     {
         printf("Failed to send RR%d command.\n", frame_number);
         return -1;
@@ -387,17 +325,10 @@ int send_RR()
 
 int send_REJ()
 {
-    const int BUF_SIZE = 5;
-    unsigned char buf[BUF_SIZE + 1];
-    memset(buf, 0, sizeof(buf)); // Initialize to zero
+    unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, frame_number == 0 ? REJ0 : REJ1, 0, FLAG};
+    buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
-    buf[0] = FLAG;
-    buf[1] = RECEIVER_ADDRESS;
-    buf[2] = frame_number == 0 ? REJ0 : REJ1;
-    buf[3] = buf[1] ^ buf[2];
-    buf[4] = FLAG;
-
-    if (safe_write(buf, BUF_SIZE) < 0)
+    if (safe_write(buf, 5) < 0)
     {
         printf("Failed to send REJ%d command.\n", frame_number);
         return -1;
@@ -418,25 +349,9 @@ int llread(unsigned char *packet)
         unsigned char byte = 0;
         int read_byte = readByteSerialPort(&byte);
 
-        if (read_byte > 0)
+        if (read_byte == 0)
         {
-            // printf("State: %d, Received byte: 0x%02x - ", machine.state, byte);
-            int status = state_machine(&machine, byte);
-            // printf("State: %d, Status %d\n", machine.state, status);
-
-            if (machine.state == STP && status == 0)
-            {
-                // printf("State: %d, Status %d, Received byte: 0x%02x\n", machine.state, status, byte);
-                if (send_REJ() < 0) // Failed to send REJ command
-                    return -1;
-
-                machine.state = START;
-            }
-            else if (machine.state == STP && status > 0)
-            {
-                printf("Frame %d received!\n", frame_number);
-                break;
-            }
+            continue; // 0 bytes read
         }
         else if (read_byte < 0)
         {
@@ -444,21 +359,32 @@ int llread(unsigned char *packet)
             return -1;
         }
 
+        // printf("State: %d, Received byte: 0x%02x - ", machine.state, byte);
+        int status = state_machine(&machine, byte);
+        // printf("State: %d, Status %d\n", machine.state, status);
+
+        if (machine.state == STP)
+        {
+            if (status == 0)
+            {
+                if (send_REJ() < 0) // Failed to send REJ command
+                    return -1;
+
+                machine.state = START; // Reset state for next frame
+            }
+            else
+            {
+                printf("Frame %d received!\n", frame_number);
+                break; // Frame received successfully
+            }
+        }
     } while (machine.state != STP);
 
     if (send_RR() < 0) // Failed to send RR command
         return -1;
 
-    /*
-    printf("%d", machine.buf_size);
-    for (int i = 0; i < machine.buf_size; i++)
-        printf("%c", machine.buf[i]);
-    printf("\n");
-    */
-
-    memcpy(packet, machine.buf, machine.buf_size);
-
-    frame_number = 1 - frame_number;
+    memcpy(packet, machine.buf, machine.buf_size); // Copy received packet
+    frame_number = 1 - frame_number;               // Switch frame number
 
     return machine.buf_size;
 }

@@ -5,8 +5,8 @@
 #define FALSE 0
 #define TRUE 1
 
-extern int alarmEnabled;
-extern int alarmCount;
+extern int alarm_enabled;
+extern int alarm_count;
 
 // Alarm function handler
-void alarmHandler(int signal);
+void alarm_handler(int signal);

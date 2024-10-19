@@ -7,14 +7,14 @@
 #include <stdio.h>
 #include "alarm.h"
 
-int alarmEnabled = FALSE;
-int alarmCount = 0;
+int alarm_enabled = FALSE;
+int alarm_count = 0;
 
 // Alarm function handler
-void alarmHandler(int signal)
+void alarm_handler(int signal)
 {
-    alarmEnabled = FALSE;
-    alarmCount++;
+    alarm_enabled = FALSE;
+    alarm_count++;
 
-    printf("Alarm #%d\n", alarmCount);
+    printf("Alarm #%d\n", alarm_count);
 }
