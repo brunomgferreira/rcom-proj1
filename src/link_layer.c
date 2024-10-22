@@ -62,7 +62,7 @@ int llopen(LinkLayer connectionParameters)
 int llwrite(const unsigned char *buf, int bufSize)
 {
     struct state_machine machine;
-    create_state_machine(&machine, WRITE, (frame_number == 0 ? RR0 : RR1), RECEIVER_ADDRESS, START);
+    create_state_machine(&machine, WRITE, (frame_number == 0 ? RR0 : RR1), REPLY_FROM_RECEIVER_ADDRESS, START);
 
     unsigned int attempt = 0;
     extern int alarm_enabled;
@@ -240,7 +240,7 @@ int send_SET()
 
 int send_ACK()
 {
-    unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, UA, 0, FLAG};
+    unsigned char buf[5] = {FLAG, REPLY_FROM_RECEIVER_ADDRESS, UA, 0, FLAG};
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
     if (safe_write(buf, 5) < 0)
@@ -282,7 +282,7 @@ int llopen_receiver()
 int llopen_transmitter()
 {
     struct state_machine machine;
-    create_state_machine(&machine, CONNECTION, UA, RECEIVER_ADDRESS, START);
+    create_state_machine(&machine, CONNECTION, UA, REPLY_FROM_RECEIVER_ADDRESS, START);
 
     unsigned int attempt = 0;
     extern int alarm_enabled;
@@ -400,7 +400,7 @@ int send_data_frame(const unsigned char *buf, int buf_size)
 
 int send_RR()
 {
-    unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, frame_number == 0 ? RR0 : RR1, 0, FLAG};
+    unsigned char buf[5] = {FLAG, REPLY_FROM_RECEIVER_ADDRESS, frame_number == 0 ? RR0 : RR1, 0, FLAG};
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
     if (safe_write(buf, 5) < 0)
@@ -416,7 +416,7 @@ int send_RR()
 
 int send_REJ()
 {
-    unsigned char buf[5] = {FLAG, RECEIVER_ADDRESS, frame_number == 0 ? REJ0 : REJ1, 0, FLAG};
+    unsigned char buf[5] = {FLAG, REPLY_FROM_RECEIVER_ADDRESS, frame_number == 0 ? REJ0 : REJ1, 0, FLAG};
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
     if (safe_write(buf, 5) < 0)

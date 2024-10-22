@@ -35,11 +35,15 @@ struct state_machine
 #define FLAG 0x7E
 #define TRANSMITTER_ADDRESS 0x03
 #define RECEIVER_ADDRESS 0x01
+#define REPLY_FROM_TRANSMITTER_ADDRESS 0x01
+#define REPLY_FROM_RECEIVER_ADDRESS 0x03
 #define SET 0x03
 #define UA 0x07
 #define I_FRAME_0 0x00
 #define I_FRAME_1 0x80
 #define ESC 0x7D
+#define ESC_FLAG 0x5E // TODO
+#define ESC_ESC 0x5D  // TODO
 #define RR0 0xAA
 #define RR1 0xAB
 #define REJ0 0x54
