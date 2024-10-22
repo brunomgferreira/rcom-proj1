@@ -108,7 +108,7 @@ int llwrite(const unsigned char *buf, int bufSize)
                 // printf("REJ%d was received!\n", frame_number);
                 alarm(0);
                 alarm_enabled = FALSE;
-                attempt = 0;
+                // attempt = 0;
                 break; // Send frame again
             }
             else if (machine.state == STP)
@@ -356,12 +356,12 @@ int send_data_frame(const unsigned char *buf, int buf_size)
         if (buf[i] == FLAG)
         {
             frame[frame_size++] = ESC;
-            frame[frame_size++] = 0x5E; // Escape FLAG
+            frame[frame_size++] = ESC_FLAG; // Escape FLAG
         }
         else if (buf[i] == ESC)
         {
             frame[frame_size++] = ESC;
-            frame[frame_size++] = 0x5D; // Escape ESC
+            frame[frame_size++] = ESC_ESC; // Escape ESC
         }
         else
         {
@@ -374,12 +374,12 @@ int send_data_frame(const unsigned char *buf, int buf_size)
     if (BCC2 == FLAG)
     {
         frame[frame_size++] = ESC;
-        frame[frame_size++] = 0x5E; // Escape FLAG
+        frame[frame_size++] = ESC_FLAG; // Escape FLAG
     }
     else if (BCC2 == ESC)
     {
         frame[frame_size++] = ESC;
-        frame[frame_size++] = 0x5D; // Escape ESC
+        frame[frame_size++] = ESC_ESC; // Escape ESC
     }
     else
     {

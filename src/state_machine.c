@@ -145,7 +145,8 @@ void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte)
         }
         else
         {
-            machine->state = START;
+            // machine->state = START;
+            machine->state = STP;
             machine->REJ = 1; // Send REJ frame.
         }
     }
@@ -154,8 +155,8 @@ void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte)
         if (machine->escape_sequence) // Byte Destuffing
         {
             machine->escape_sequence = 0;
-            byte = (byte == 0x5E) ? FLAG : (byte == 0x5D) ? ESC
-                                                          : 0;
+            byte = (byte == ESC_FLAG) ? FLAG : (byte == ESC_ESC) ? ESC
+                                                                 : 0;
             if (!byte)
             {
                 machine->REJ = 1; // Invalid escape, send REJ
