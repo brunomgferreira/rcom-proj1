@@ -108,8 +108,8 @@ int llwrite(const unsigned char *buf, int bufSize)
                 // printf("REJ%d was received!\n", frame_number);
                 alarm(0);
                 alarm_enabled = FALSE;
-                // attempt = 0;
-                break; // Send frame again
+                attempt--; // Stay on the same attempt
+                break;     // Send frame again
             }
             else if (machine.state == STP)
             {
