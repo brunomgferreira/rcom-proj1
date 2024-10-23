@@ -16,6 +16,8 @@ LinkLayer connection_parameters;
 int frame_number = 0;
 int frames_received = 0;
 
+extern struct ll_statistics statistics;
+
 int safe_write(const unsigned char *bytes, int num_bytes);
 int send_SET();
 int send_ACK();
@@ -27,6 +29,7 @@ int send_REJ();
 int send_DISC();
 int llclose_receiver();
 int llclose_transmitter();
+void show_statistics(struct ll_statistics statistics);
 
 ////////////////////////////////////////////////
 // LLOPEN
@@ -82,6 +85,8 @@ int llwrite(const unsigned char *buf, int bufSize)
         if (send_data_frame(buf, bufSize) < 0) // Failed to send frame
         {
             // printf("Error sending frame %d. Retrying...\n", frame_number);
+            alarm(0);
+            statistics.num_retransmissions++;
             continue; // Retry sending frame if it fails
         }
 
@@ -109,6 +114,8 @@ int llwrite(const unsigned char *buf, int bufSize)
             if (machine.state == STP && machine.REJ)
             {
                 // printf("REJ%d was received!\n", frame_number);
+                statistics.num_REJ_received++;
+                statistics.num_timeouts--;
                 alarm(0);
                 alarm_enabled = FALSE;
                 attempt--; // Stay on the same attempt
@@ -118,15 +125,15 @@ int llwrite(const unsigned char *buf, int bufSize)
             {
                 frame_number = 1 - frame_number;
                 // printf("RR%d was received!\n", frame_number);
+                statistics.num_RR_received++;
                 alarm(0);
                 alarm_enabled = FALSE;
                 return bufSize;
             }
         }
-        if (!alarm_enabled && alarm_count > 0)
-        {
-            // printf("No RR received, retrying...\n");
-        }
+        // printf("No RR received, retrying...\n");
+        statistics.num_retransmissions++;
+        statistics.num_timeouts++;
     }
     printf("Failed to send frame after %d attempts\n", connection_parameters.nRetransmissions);
     return -1;
@@ -160,6 +167,8 @@ int llread(unsigned char *packet)
 
         if (machine.state == STP && machine.ACK && frames_received == 0)
         {
+            statistics.num_SET_received++;
+
             if (send_ACK() < 0)
                 return -1;
 
@@ -168,11 +177,18 @@ int llread(unsigned char *packet)
         else if (machine.state == STP && machine.duplicate)
         {
             // printf("Duplicated received\n");
+            statistics.num_I_frames_received++;
+            statistics.num_duplicated_frames++;
+
             if (send_RR() < 0) // Failed to send RR command
                 return -1;
+
+            machine.state = START;
         }
         else if (machine.state == STP && machine.REJ)
         {
+            statistics.num_I_frames_received++;
+
             if (send_REJ() < 0) // Failed to send REJ command
                 return -1;
 
@@ -181,6 +197,7 @@ int llread(unsigned char *packet)
         else if (machine.state == STP)
         {
             // printf("Frame %d received!\n", frame_number);
+            statistics.num_I_frames_received++;
             frames_received++;
             break; // Frame received successfully
         }
@@ -215,6 +232,9 @@ int llclose(int showStatistics)
 
     if (closeSerialPort() < 0)
         clstat = -1;
+
+    if (showStatistics)
+        show_statistics(statistics);
 
     return clstat;
 }
@@ -256,7 +276,7 @@ int send_SET()
     }
 
     // printf("SET sent!\n");
-
+    statistics.num_SET_sent++;
     return 1;
 }
 
@@ -280,7 +300,7 @@ int send_ACK()
     }
 
     // printf("ACK sent!\n");
-
+    statistics.num_UA_sent++;
     return 1;
 }
 
@@ -294,18 +314,22 @@ int llopen_receiver()
         unsigned char byte = 0;
         int read_byte = readByteSerialPort(&byte);
 
-        if (read_byte > 0)
+        if (read_byte == 0)
         {
-            // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
-            state_machine(&machine, byte);
+            continue; // 0 bytes read
         }
         else if (read_byte < 0)
         {
             printf("Read ERROR!");
             return -1;
         }
+
+        // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+        state_machine(&machine, byte);
+
     } while (machine.state != STP);
 
+    statistics.num_SET_received++;
     return send_ACK();
 }
 
@@ -329,6 +353,8 @@ int llopen_transmitter()
         if (send_SET() < 0)
         {
             // printf("Error sending SET. Retrying...\n");
+            alarm(0);
+            statistics.num_retransmissions++;
             continue; // Retry sending SET if it fails
         }
 
@@ -359,13 +385,13 @@ int llopen_transmitter()
                 // printf("ACK was received!\n");
                 alarm(0);
                 alarm_enabled = FALSE;
+                statistics.num_UA_received++;
                 return 1;
             }
         }
-        if (!alarm_enabled && alarm_count > 0)
-        {
-            // printf("No ACK received, retrying...\n");
-        }
+        // printf("No ACK received, retrying...\n");
+        statistics.num_retransmissions++;
+        statistics.num_timeouts++;
     }
     // printf("Failed to establish connection after %d attempts\n", nRetransmissions);
     return -1;
@@ -426,6 +452,7 @@ int send_data_frame(const unsigned char *buf, int buf_size)
     }
 
     // printf("Frame %d sent!\n", frame_number);
+    statistics.num_I_frames_sent++;
     return 1;
 }
 
@@ -441,7 +468,7 @@ int send_RR()
     }
 
     // printf("RR%d sent!\n", frame_number);
-
+    statistics.num_RR_sent++;
     return 1;
 }
 
@@ -457,7 +484,7 @@ int send_REJ()
     }
 
     // printf("REJ%d sent!\n", frame_number);
-
+    statistics.num_REJ_sent++;
     return 1;
 }
 
@@ -481,7 +508,7 @@ int send_DISC()
     }
 
     // printf("DISC sent!\n");
-
+    statistics.num_DISC_sent++;
     return 1;
 }
 
@@ -505,6 +532,8 @@ int llclose_transmitter()
 
         if (send_DISC() < 0) // Failed to send DISC
         {
+            alarm(0);
+            statistics.num_retransmissions++;
             continue; // Retry sending DISC if it fails
         }
 
@@ -532,6 +561,7 @@ int llclose_transmitter()
             if (machine.state == STP)
             {
                 // printf("DISC was received!\n");
+                statistics.num_DISC_received++;
                 alarm(0);
                 alarm_enabled = FALSE;
 
@@ -541,10 +571,9 @@ int llclose_transmitter()
                 return 1;
             }
         }
-        if (!alarm_enabled && alarm_count > 0)
-        {
-            // printf("No DISC received, retrying...\n");
-        }
+        // printf("No DISC received, retrying...\n");
+        statistics.num_retransmissions++;
+        statistics.num_timeouts++;
     }
     printf("Failed to send DISC after %d attempts\n", connection_parameters.nRetransmissions);
     return -1;
@@ -577,6 +606,7 @@ int llclose_receiver()
         if (machine.state == STP)
         {
             // printf("DISC was received!\n");
+            statistics.num_DISC_received++;
             break; // DISC received successfully
         }
     } while (machine.state != STP);
@@ -599,6 +629,8 @@ int llclose_receiver()
 
         if (send_DISC() < 0) // Failed to send DISC
         {
+            alarm(0);
+            statistics.num_retransmissions++;
             continue; // Retry sending DISC if it fails
         }
 
@@ -626,16 +658,54 @@ int llclose_receiver()
             if (machine.state == STP)
             {
                 // printf("ACK was received!\n");
+                statistics.num_UA_received++;
                 alarm(0);
                 alarm_enabled = FALSE;
                 return 1;
             }
         }
-        if (!alarm_enabled && alarm_count > 0)
-        {
-            // printf("No ACK received, retrying...\n");
-        }
+        // printf("No ACK received, retrying...\n");
+        statistics.num_retransmissions++;
+        statistics.num_timeouts++;
     }
     printf("Failed to send DISC after %d attempts\n", connection_parameters.nRetransmissions);
     return -1;
+}
+
+void show_statistics(struct ll_statistics statistics)
+{
+    int num_frames_sent = statistics.num_SET_sent +
+                          statistics.num_UA_sent +
+                          statistics.num_RR_sent +
+                          statistics.num_REJ_sent +
+                          statistics.num_I_frames_sent +
+                          statistics.num_DISC_sent;
+    int num_frames_received = statistics.num_SET_received +
+                              statistics.num_UA_received +
+                              statistics.num_RR_received +
+                              statistics.num_REJ_received +
+                              statistics.num_I_frames_received +
+                              statistics.num_DISC_received;
+
+    printf("\n");
+    printf("Total Frames Sent: %d\n", num_frames_sent);
+    printf("Total Frames Received: %d\n", num_frames_received);
+    printf("Total SET Frames Sent: %d\n", statistics.num_SET_sent);
+    printf("Total SET Frames Received: %d\n", statistics.num_SET_received);
+    printf("Total UA Frames Sent: %d\n", statistics.num_UA_sent);
+    printf("Total UA Frames Received: %d\n", statistics.num_UA_received);
+    printf("Total RR Frames Sent: %d\n", statistics.num_RR_sent);
+    printf("Total RR Frames Received: %d\n", statistics.num_RR_received);
+    printf("Total REJ Frames Sent: %d\n", statistics.num_REJ_sent);
+    printf("Total REJ Frames Received: %d\n", statistics.num_REJ_received);
+    printf("Total I Frames Sent: %d\n", statistics.num_I_frames_sent);
+    printf("Total I Frames Received: %d\n", statistics.num_I_frames_received);
+    printf("Total DISC Frames Sent: %d\n", statistics.num_DISC_sent);
+    printf("Total DISC Frames Received: %d\n", statistics.num_DISC_received);
+    printf("Total Invalid BCC1 Received: %d\n", statistics.num_invalid_BCC1_received);
+    printf("Total Invalid BCC2 Received: %d\n", statistics.num_invalid_BCC2_received);
+    printf("Total Duplicated Frames Received: %d\n", statistics.num_duplicated_frames);
+    printf("Total Timeouts: %d\n", statistics.num_timeouts);
+    printf("Total Retransmissions: %d\n", statistics.num_retransmissions);
+    printf("\n");
 }

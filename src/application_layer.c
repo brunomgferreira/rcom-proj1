@@ -26,8 +26,9 @@ int send_control_packet(int control_byte, const char *filename, int file_size);
 int handle_receiver(const char *filename);
 int handle_transmitter(const char *filename);
 int read_control_packet(int *file_size, unsigned char *received_filename);
-int read_data_packets(FILE *output_file);
+int read_data_packets(FILE *output_file, const unsigned char *received_filename, int file_size);
 int send_data_packets(FILE *file, const char *filename, int file_size);
+int check_end_packet(unsigned char *control_packet, int data_size, const unsigned char *filename, int file_size);
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
@@ -79,7 +80,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     }
 
     // Termination
-    if (llclose(0) < 0)
+    if (llclose(1) < 0)
     {
         printf("Failed to close connection.\n");
     }
@@ -176,7 +177,7 @@ int read_control_packet(int *file_size, unsigned char *received_filename)
     return -1;
 }
 
-int read_data_packets(FILE *output_file)
+int read_data_packets(FILE *output_file, const unsigned char *received_filename, int file_size)
 {
     // Buffer for out-of-sequence packets
     Packet packet_buffer[MAX_PACKETS];
@@ -200,6 +201,10 @@ int read_data_packets(FILE *output_file)
         {
             // TODO Check this
             // printf("Received end packet.\n");
+            if (check_end_packet(data_packet, bytes_read, received_filename, file_size) < 0)
+            {
+                printf("Start and End control packet mismatch!\n");
+            }
             return 1;
         }
 
@@ -207,14 +212,14 @@ int read_data_packets(FILE *output_file)
         {
             Packet packet;
             packet.sequence_number = data_packet[1];
-            packet.data_size = 256 * data_packet[2] + data_packet[3]; // K = 256 * L2 + L1
+            packet.data_size = 256 * (int)data_packet[2] + (int)data_packet[3]; // K = 256 * L2 + L1
             memcpy(packet.data, &data_packet[4], packet.data_size);
 
-            if (packet.data_size + 4 > bytes_read)
+            if (packet.data_size + 4 != bytes_read)
             {
                 // If link_layer is correct, this will never happen
                 printf("Packet size mismatch, expected %d bytes but got %d.\n", packet.data_size + 4, bytes_read);
-                return -1;
+                packet.data_size = bytes_read - 4;
             }
 
             if (packet.sequence_number == expected_sequence_number)
@@ -266,7 +271,7 @@ int handle_receiver(const char *filename)
     }
 
     // Read and process data packets
-    if (read_data_packets(output_file) < 0)
+    if (read_data_packets(output_file, received_filename, file_size) < 0)
     {
         fclose(output_file);
         return -1;
@@ -349,4 +354,47 @@ int handle_transmitter(const char *filename)
     // printf("File sent successfully, total bytes: %d\n", file_size);
     fclose(file);
     return 1;
+}
+
+int check_end_packet(unsigned char *control_packet, int data_size, const unsigned char *filename, int file_size)
+{
+    int index = 1;
+
+    int received_file_size = 0;
+    unsigned char received_filename[MAX_PAYLOAD_SIZE];
+
+    int end_filename_sent = 0;
+
+    // Extract file size and filename from the control packet
+    while (index < data_size)
+    {
+        unsigned char type = control_packet[index++];
+        unsigned char length = control_packet[index++];
+        if (type == FILE_SIZE)
+        {
+            memcpy(&received_file_size, &control_packet[index], length);
+            index += length;
+
+            if (received_file_size != file_size)
+            {
+                // printf("End packet file size does not match start packet file size!\n");
+                return -1;
+            }
+        }
+        else if (type == FILE_NAME)
+        {
+            memcpy(received_filename, &control_packet[index], length);
+            received_filename[length] = '\0'; // Null-terminate
+            index += length;
+            end_filename_sent = 1;
+
+            if (strcmp((const char *)received_filename, (const char *)filename) != 0)
+            {
+                // printf("End packet filename does not match start packet filename!\n");
+                return -1;
+            }
+        }
+    }
+
+    return (strlen((const char *)filename) > 0 && end_filename_sent) ? 1 : -1;
 }

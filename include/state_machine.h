@@ -35,6 +35,27 @@ struct state_machine
     unsigned char duplicate;
 };
 
+struct ll_statistics
+{
+    int num_SET_sent;
+    int num_SET_received;
+    int num_UA_sent;
+    int num_UA_received;
+    int num_RR_sent;
+    int num_RR_received;
+    int num_REJ_sent;
+    int num_REJ_received;
+    int num_I_frames_sent;
+    int num_I_frames_received;
+    int num_DISC_sent;
+    int num_DISC_received;
+    int num_duplicated_frames;
+    int num_retransmissions;
+    int num_timeouts;
+    int num_invalid_BCC1_received;
+    int num_invalid_BCC2_received;
+};
+
 #define FLAG 0x7E
 #define TRANSMITTER_ADDRESS 0x03
 #define RECEIVER_ADDRESS 0x01
@@ -52,6 +73,8 @@ struct state_machine
 #define RR1 0xAB
 #define REJ0 0x54
 #define REJ1 0x55
+
+extern struct ll_statistics statistics;
 
 void create_state_machine(struct state_machine *machine, enum state_machine_type type, unsigned char control_byte, unsigned char address_byte, enum state_machine_state state);
 void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte);

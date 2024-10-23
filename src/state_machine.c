@@ -2,6 +2,25 @@
 #include <stdio.h>
 #include <string.h>
 
+struct ll_statistics statistics = {
+    .num_SET_sent = 0,
+    .num_SET_received = 0,
+    .num_UA_sent = 0,
+    .num_UA_received = 0,
+    .num_RR_sent = 0,
+    .num_RR_received = 0,
+    .num_REJ_sent = 0,
+    .num_REJ_received = 0,
+    .num_I_frames_sent = 0,
+    .num_I_frames_received = 0,
+    .num_DISC_sent = 0,
+    .num_DISC_received = 0,
+    .num_duplicated_frames = 0,
+    .num_retransmissions = 0,
+    .num_timeouts = 0,
+    .num_invalid_BCC1_received = 0,
+    .num_invalid_BCC2_received = 0};
+
 void create_state_machine(struct state_machine *machine, enum state_machine_type type, unsigned char control_byte, unsigned char address_byte, enum state_machine_state state)
 {
     machine->type = type;
@@ -78,8 +97,8 @@ void state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
         machine->BCC1 ^= byte;
     }
     else if (machine->type == WRITE &&
-             ((machine->control_byte == RR0 && byte == REJ0) ||
-              (machine->control_byte == RR1 && byte == REJ1)))
+             ((machine->control_byte == RR0 && byte == REJ1) ||
+              (machine->control_byte == RR1 && byte == REJ0)))
     {
         machine->state = C_RCV;
         machine->REJ = 1; // REJ received
@@ -123,6 +142,7 @@ void state_machine_C_RCV(struct state_machine *machine, unsigned char byte)
     }
     else
     {
+        statistics.num_invalid_BCC1_received++;
         machine->state = START;
     }
 }
@@ -156,7 +176,7 @@ void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte)
         }
         else
         {
-            // machine->state = START;
+            statistics.num_invalid_BCC2_received++;
             machine->state = STP;
             machine->REJ = 1; // Send REJ frame.
         }
