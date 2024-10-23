@@ -15,6 +15,7 @@
 int timeout = 0;
 int nRetransmissions = 0;
 int frame_number = 0;
+int frames_received = 0;
 
 int safe_write(const unsigned char *bytes, int num_bytes);
 int send_SET();
@@ -62,7 +63,7 @@ int llopen(LinkLayer connectionParameters)
 int llwrite(const unsigned char *buf, int bufSize)
 {
     struct state_machine machine;
-    create_state_machine(&machine, WRITE, (frame_number == 0 ? RR0 : RR1), REPLY_FROM_RECEIVER_ADDRESS, START);
+    create_state_machine(&machine, WRITE, (frame_number == 0 ? RR1 : RR0), REPLY_FROM_RECEIVER_ADDRESS, START);
 
     unsigned int attempt = 0;
     extern int alarm_enabled;
@@ -113,10 +114,10 @@ int llwrite(const unsigned char *buf, int bufSize)
             }
             else if (machine.state == STP)
             {
+                frame_number = 1 - frame_number;
                 // printf("RR%d was received!\n", frame_number);
                 alarm(0);
                 alarm_enabled = FALSE;
-                frame_number = 1 - frame_number;
                 return bufSize;
             }
         }
@@ -136,7 +137,7 @@ int llread(unsigned char *packet)
 {
     struct state_machine machine;
     create_state_machine(&machine, READ, (frame_number == 0 ? I_FRAME_0 : I_FRAME_1), TRANSMITTER_ADDRESS, START);
-    int frames_received = 0;
+
     do
     {
         unsigned char byte = 0;
@@ -162,6 +163,12 @@ int llread(unsigned char *packet)
 
             machine.state = START;
         }
+        else if (machine.state == STP && machine.duplicate)
+        {
+            // printf("Duplicated received\n");
+            if (send_RR() < 0) // Failed to send RR command
+                return -1;
+        }
         else if (machine.state == STP && machine.REJ)
         {
             if (send_REJ() < 0) // Failed to send REJ command
@@ -177,11 +184,11 @@ int llread(unsigned char *packet)
         }
     } while (machine.state != STP);
 
-    if (send_RR() < 0) // Failed to send RR command
+    frame_number = 1 - frame_number; // Switch frame number
+    if (send_RR() < 0)               // Failed to send RR command
         return -1;
 
     memcpy(packet, machine.buf, machine.buf_size); // Copy received packet
-    frame_number = 1 - frame_number;               // Switch frame number
 
     return machine.buf_size;
 }

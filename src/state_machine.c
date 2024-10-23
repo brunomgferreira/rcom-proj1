@@ -13,6 +13,7 @@ void create_state_machine(struct state_machine *machine, enum state_machine_type
     machine->ACK = 0;
     machine->buf_size = 0;
     machine->escape_sequence = 0;
+    machine->duplicate = 0;
 }
 
 void state_machine(struct state_machine *machine, unsigned char byte)
@@ -27,6 +28,7 @@ void state_machine(struct state_machine *machine, unsigned char byte)
         machine->REJ = 0;
         machine->ACK = 0;
         machine->BCC2 = 0;
+        machine->duplicate = 0;
         state_machine_FLAG_RCV(machine, byte);
         break;
 
@@ -60,6 +62,7 @@ void state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte)
     if (byte == machine->address_byte)
     {
         machine->state = A_RCV;
+        machine->BCC1 = byte;
     }
     else if (byte != FLAG)
     {
@@ -72,6 +75,7 @@ void state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
     if (byte == machine->control_byte)
     {
         machine->state = C_RCV;
+        machine->BCC1 ^= byte;
     }
     else if (machine->type == WRITE &&
              ((machine->control_byte == RR0 && byte == REJ0) ||
@@ -79,11 +83,21 @@ void state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
     {
         machine->state = C_RCV;
         machine->REJ = 1; // REJ received
+        machine->BCC1 ^= byte;
     }
     else if (machine->type == READ && byte == SET)
     {
         machine->state = C_RCV;
         machine->ACK = 1; // SET received
+        machine->BCC1 ^= byte;
+    }
+    else if (machine->type == READ &&
+             ((machine->control_byte == I_FRAME_0 && byte == I_FRAME_1) ||
+              (machine->control_byte == I_FRAME_1 && byte == I_FRAME_0)))
+    {
+        machine->state = C_RCV;
+        machine->duplicate = 1; // Duplicate received
+        machine->BCC1 ^= byte;
     }
     else if (byte == FLAG)
     {
@@ -97,11 +111,7 @@ void state_machine_A_RCV(struct state_machine *machine, unsigned char byte)
 
 void state_machine_C_RCV(struct state_machine *machine, unsigned char byte)
 {
-    if ((machine->type == WRITE &&
-         ((machine->control_byte == RR0 && byte == (machine->address_byte ^ REJ0)) ||
-          (machine->control_byte == RR1 && byte == (machine->address_byte ^ REJ1)))) ||
-        byte == (machine->address_byte ^ machine->control_byte) ||
-        (machine->type == READ && machine->ACK && byte == (machine->address_byte ^ SET)))
+    if (byte == machine->BCC1)
     {
         machine->buf_size = 0;
         machine->state = BCC1_OK;

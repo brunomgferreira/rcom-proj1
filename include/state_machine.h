@@ -26,10 +26,12 @@ struct state_machine
     enum state_machine_state state;
     unsigned char buf[MAX_PAYLOAD_SIZE * 2 + 2];
     int buf_size;
+    unsigned char BCC1;
     unsigned char BCC2;
     unsigned char escape_sequence;
     unsigned char REJ;
     unsigned char ACK;
+    unsigned char duplicate;
 };
 
 #define FLAG 0x7E
