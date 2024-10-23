@@ -15,7 +15,8 @@ enum state_machine_type
 {
     CONNECTION,
     READ,
-    WRITE
+    WRITE,
+    DISCONNECTION
 };
 
 struct state_machine
@@ -41,6 +42,7 @@ struct state_machine
 #define REPLY_FROM_RECEIVER_ADDRESS 0x03
 #define SET 0x03
 #define UA 0x07
+#define DISC 0x0B
 #define I_FRAME_0 0x00
 #define I_FRAME_1 0x80
 #define ESC 0x7D

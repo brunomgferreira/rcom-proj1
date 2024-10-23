@@ -12,8 +12,7 @@
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
-int timeout = 0;
-int nRetransmissions = 0;
+LinkLayer connection_parameters;
 int frame_number = 0;
 int frames_received = 0;
 
@@ -25,6 +24,9 @@ int llopen_transmitter();
 int send_data_frame(const unsigned char *buf, int buf_size);
 int send_RR();
 int send_REJ();
+int send_DISC();
+int llclose_receiver();
+int llclose_transmitter();
 
 ////////////////////////////////////////////////
 // LLOPEN
@@ -37,8 +39,7 @@ int llopen(LinkLayer connectionParameters)
         return -1;
     }
 
-    timeout = connectionParameters.timeout;
-    nRetransmissions = connectionParameters.nRetransmissions;
+    connection_parameters = connectionParameters;
 
     switch (connectionParameters.role)
     {
@@ -68,11 +69,12 @@ int llwrite(const unsigned char *buf, int bufSize)
     unsigned int attempt = 0;
     extern int alarm_enabled;
     extern int alarm_count;
+    alarm_enabled = FALSE;
     alarm_count = 0; // Reset alarm count
 
     (void)signal(SIGALRM, alarm_handler);
 
-    while (attempt < nRetransmissions)
+    while (attempt < connection_parameters.nRetransmissions)
     {
         attempt++;
         // printf("Attempt #%d\n", attempt);
@@ -83,7 +85,7 @@ int llwrite(const unsigned char *buf, int bufSize)
             continue; // Retry sending frame if it fails
         }
 
-        alarm(timeout);
+        alarm(connection_parameters.timeout);
         alarm_enabled = TRUE;
         machine.state = START;
 
@@ -126,7 +128,7 @@ int llwrite(const unsigned char *buf, int bufSize)
             // printf("No RR received, retrying...\n");
         }
     }
-    printf("Failed to send frame after %d attempts\n", nRetransmissions);
+    printf("Failed to send frame after %d attempts\n", connection_parameters.nRetransmissions);
     return -1;
 }
 
@@ -198,9 +200,22 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    // TODO
+    int clstat = 1;
 
-    int clstat = closeSerialPort();
+    if (connection_parameters.role == LlRx)
+    {
+        if (llclose_receiver() < 0)
+            clstat = -1;
+    }
+    else if (connection_parameters.role == LlTx)
+    {
+        if (llclose_transmitter() < 0)
+            clstat = -1;
+    }
+
+    if (closeSerialPort() < 0)
+        clstat = -1;
+
     return clstat;
 }
 
@@ -247,7 +262,15 @@ int send_SET()
 
 int send_ACK()
 {
-    unsigned char buf[5] = {FLAG, REPLY_FROM_RECEIVER_ADDRESS, UA, 0, FLAG};
+    unsigned char buf[5] = {FLAG, 0, UA, 0, FLAG};
+    if (connection_parameters.role == LlRx)
+    {
+        buf[1] = REPLY_FROM_RECEIVER_ADDRESS;
+    }
+    else if (connection_parameters.role == LlTx)
+    {
+        buf[1] = REPLY_FROM_TRANSMITTER_ADDRESS;
+    }
     buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
 
     if (safe_write(buf, 5) < 0)
@@ -294,10 +317,11 @@ int llopen_transmitter()
     unsigned int attempt = 0;
     extern int alarm_enabled;
     extern int alarm_count;
+    alarm_enabled = FALSE;
     alarm_count = 0; // Reset alarm count
     (void)signal(SIGALRM, alarm_handler);
 
-    while (attempt < nRetransmissions)
+    while (attempt < connection_parameters.nRetransmissions)
     {
         attempt++;
         // printf("Attempt #%d\n", attempt);
@@ -308,7 +332,7 @@ int llopen_transmitter()
             continue; // Retry sending SET if it fails
         }
 
-        alarm(timeout);
+        alarm(connection_parameters.timeout);
         alarm_enabled = TRUE;
         machine.state = START;
 
@@ -435,4 +459,183 @@ int send_REJ()
     // printf("REJ%d sent!\n", frame_number);
 
     return 1;
+}
+
+int send_DISC()
+{
+    unsigned char buf[5] = {FLAG, 0, DISC, 0, FLAG};
+    if (connection_parameters.role == LlRx)
+    {
+        buf[1] = RECEIVER_ADDRESS;
+    }
+    else if (connection_parameters.role == LlTx)
+    {
+        buf[1] = TRANSMITTER_ADDRESS;
+    }
+    buf[3] = buf[1] ^ buf[2]; // Calculate BCC1
+
+    if (safe_write(buf, 5) < 0)
+    {
+        printf("Failed to send DISC command.\n");
+        return -1;
+    }
+
+    // printf("DISC sent!\n");
+
+    return 1;
+}
+
+int llclose_transmitter()
+{
+    struct state_machine machine;
+    create_state_machine(&machine, DISCONNECTION, DISC, RECEIVER_ADDRESS, START);
+
+    unsigned int attempt = 0;
+    extern int alarm_enabled;
+    extern int alarm_count;
+    alarm_enabled = FALSE;
+    alarm_count = 0; // Reset alarm count
+
+    (void)signal(SIGALRM, alarm_handler);
+
+    while (attempt < connection_parameters.nRetransmissions)
+    {
+        attempt++;
+        // printf("Attempt #%d\n", attempt);
+
+        if (send_DISC() < 0) // Failed to send DISC
+        {
+            continue; // Retry sending DISC if it fails
+        }
+
+        alarm(connection_parameters.timeout);
+        alarm_enabled = TRUE;
+        machine.state = START;
+
+        while (alarm_enabled)
+        {
+            unsigned char byte = 0;
+            int read_byte = readByteSerialPort(&byte);
+
+            if (read_byte == 0)
+            {
+                continue; // 0 bytes read
+            }
+            else if (read_byte < 0)
+            {
+                printf("Read ERROR!");
+                return -1;
+            }
+
+            // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+            state_machine(&machine, byte);
+            if (machine.state == STP)
+            {
+                // printf("DISC was received!\n");
+                alarm(0);
+                alarm_enabled = FALSE;
+
+                if (send_ACK() < 0)
+                    return -1;
+
+                return 1;
+            }
+        }
+        if (!alarm_enabled && alarm_count > 0)
+        {
+            // printf("No DISC received, retrying...\n");
+        }
+    }
+    printf("Failed to send DISC after %d attempts\n", connection_parameters.nRetransmissions);
+    return -1;
+}
+
+int llclose_receiver()
+{
+    struct state_machine machine;
+    create_state_machine(&machine, DISCONNECTION, DISC, TRANSMITTER_ADDRESS, START);
+
+    // Wait for DISC frame
+    do
+    {
+        unsigned char byte = 0;
+        int read_byte = readByteSerialPort(&byte);
+
+        if (read_byte == 0)
+        {
+            continue; // 0 bytes read
+        }
+        else if (read_byte < 0)
+        {
+            printf("Read ERROR!");
+            return -1;
+        }
+
+        // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+        state_machine(&machine, byte);
+
+        if (machine.state == STP)
+        {
+            // printf("DISC was received!\n");
+            break; // DISC received successfully
+        }
+    } while (machine.state != STP);
+
+    // Reply with a DISC and wait for the UA reply
+    create_state_machine(&machine, DISCONNECTION, UA, REPLY_FROM_TRANSMITTER_ADDRESS, START);
+
+    unsigned int attempt = 0;
+    extern int alarm_enabled;
+    extern int alarm_count;
+    alarm_enabled = FALSE;
+    alarm_count = 0; // Reset alarm count
+
+    (void)signal(SIGALRM, alarm_handler);
+
+    while (attempt < connection_parameters.nRetransmissions)
+    {
+        attempt++;
+        // printf("Attempt #%d\n", attempt);
+
+        if (send_DISC() < 0) // Failed to send DISC
+        {
+            continue; // Retry sending DISC if it fails
+        }
+
+        alarm(connection_parameters.timeout);
+        alarm_enabled = TRUE;
+        machine.state = START;
+
+        while (alarm_enabled)
+        {
+            unsigned char byte = 0;
+            int read_byte = readByteSerialPort(&byte);
+
+            if (read_byte == 0)
+            {
+                continue; // 0 bytes read
+            }
+            else if (read_byte < 0)
+            {
+                printf("Read ERROR!");
+                return -1;
+            }
+
+            // printf("State: %d, Received byte: 0x%02x\n", machine.state, byte);
+            state_machine(&machine, byte);
+            if (machine.state == STP)
+            {
+                // printf("ACK was received!\n");
+                alarm(0);
+                alarm_enabled = FALSE;
+                return 1;
+            }
+        }
+        if (!alarm_enabled && alarm_count > 0)
+        {
+            // printf("No ACK received, retrying...\n");
+        }
+    }
+    printf("Failed to send DISC after %d attempts\n", connection_parameters.nRetransmissions);
+    return -1;
 }

@@ -116,6 +116,7 @@ void state_machine_C_RCV(struct state_machine *machine, unsigned char byte)
         machine->buf_size = 0;
         machine->state = BCC1_OK;
     }
+
     else if (byte == FLAG)
     {
         machine->state = FLAG_RCV;
