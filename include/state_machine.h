@@ -1,3 +1,6 @@
+#ifndef _STATE_MACHINE_H_
+#define _STATE_MACHINE_H_
+
 #include "link_layer.h"
 
 // States of state machine
@@ -84,3 +87,5 @@ void state_machine_FLAG_RCV(struct state_machine *machine, unsigned char byte);
 void state_machine_A_RCV(struct state_machine *machine, unsigned char byte);
 void state_machine_C_RCV(struct state_machine *machine, unsigned char byte);
 void state_machine_BCC1_OK(struct state_machine *machine, unsigned char byte);
+
+#endif // _STATE_MACHINE_H_

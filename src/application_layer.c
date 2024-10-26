@@ -113,14 +113,14 @@ int send_control_packet(int control_byte, const char *filename, int file_size)
     packet[packet_size++] = control_byte; // Control field
 
     // File size
-    packet[packet_size++] = FILE_SIZE;                           // T
-    packet[packet_size++] = sizeof(file_size);                   // L (Length of V)
-    memcpy(&packet[packet_size], &file_size, sizeof(file_size)); // V
+    packet[packet_size++] = FILE_SIZE;                                            // T
+    packet[packet_size++] = (unsigned char)sizeof(file_size);                     // L (Length of V)
+    memcpy(&packet[packet_size], (unsigned char *)&file_size, sizeof(file_size)); // V
     packet_size += sizeof(file_size);
 
     // File name
     packet[packet_size++] = FILE_NAME;                        // T
-    packet[packet_size++] = strlen(filename);                 // L (Length of V)
+    packet[packet_size++] = (unsigned char)strlen(filename);  // L (Length of V)
     memcpy(&packet[packet_size], filename, strlen(filename)); // V
     packet_size += strlen(filename);
 
@@ -301,8 +301,8 @@ int send_data_packets(FILE *file, const char *filename, int file_size)
         int L1 = bytes_read % 256;
         int L2 = bytes_read / 256;
 
-        data_packet[packet_size++] = L2;
-        data_packet[packet_size++] = L1;
+        data_packet[packet_size++] = (unsigned char)L2;
+        data_packet[packet_size++] = (unsigned char)L1;
 
         memcpy(&data_packet[packet_size], packet, bytes_read);
         packet_size += bytes_read;

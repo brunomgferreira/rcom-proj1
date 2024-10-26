@@ -70,7 +70,7 @@ void state_machine(struct state_machine *machine, unsigned char byte)
 
 void state_machine_START(struct state_machine *machine, unsigned char byte)
 {
-    if (byte == FLAG)
+    if ((unsigned char)byte == (unsigned char)FLAG)
     {
         machine->state = FLAG_RCV;
     }
@@ -181,7 +181,7 @@ void process_read_BCC1_OK(struct state_machine *machine, unsigned char byte)
             machine->REJ = 1; // Send REJ frame.
         }
     }
-    else if (machine->buf_size < sizeof(machine->buf))
+    else if (machine->buf_size >= 0 && machine->buf_size < sizeof(machine->buf))
     {
         if (machine->escape_sequence) // Byte Destuffing
         {
